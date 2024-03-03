@@ -1,11 +1,11 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
+	"id": "catch",
+	"name": "Catch",
+	"version": "0.1.0",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Quick capture to an Inbox for your vault.",
+	"author": "l0rdr4t",
+	"authorUrl": "https://lordr.at",
+	"fundingUrl": "https://lordr.at/kofi",
 	"isDesktopOnly": false
 }

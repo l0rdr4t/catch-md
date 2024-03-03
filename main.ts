@@ -1,134 +1,198 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFolder } from 'obsidian';
+import { ExpressServer } from 'exp-server';
 
-// Remember to rename these classes and interfaces!
 
-interface MyPluginSettings {
-	mySetting: string;
+interface CatchPluginSettings {
+	port: string;
+	inboxFolder: string;
+	webserver: boolean;
+	template: string;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: CatchPluginSettings = {
+	port: '8980',
+	inboxFolder: '',
+	webserver: false,
+	template: ''
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class CatchPlugin extends Plugin {
+	private expressServer: ExpressServer;
+	settings: CatchPluginSettings;
+	rootFolders: Record<string, string>;
+	statusBar: HTMLElement;
+
+	startExpressServer(): void {
+		this.expressServer = new ExpressServer(this, this.settings.port || '8980');
+		this.expressServer.start();
+
+		this.statusBar = this.addStatusBarItem();
+		this.statusBar.createEl("span", { text: `Catch server [port ${this.expressServer.getUrl().port.toString()}]` });
+	};
+
+	stopExpressServer(): void {
+		this.expressServer.stop();
+		this.statusBar.remove();
+	};
+
+	addToInbox(path: string): string {
+		let filename = `${path}.md`,
+			body = this.settings.template || "",
+			inboxFolder = this.settings.inboxFolder,
+			msg = `✅ '${filename}' created in '${inboxFolder}'`;
+		this.app.vault.create(`${inboxFolder}/${filename}`, body)
+			.catch((e: any) => {
+				msg = `🚫 Error: ${e}`;
+			})
+		new Notice(msg);
+		return msg;
+	};
 
 	async onload() {
+		this.rootFolders = { '/': '/ (vault-level)' };
+		let rootAll: TAbstractFile[] = this.app.vault.getRoot().children;
+		rootAll.forEach(element => {
+			if (element instanceof TFolder) {
+				this.rootFolders['/' + element.path] = element.name;
+			}
+		});
+
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+		//@ts-ignore
+		const ribbonIconEl = this.addRibbonIcon('parking-square', `Catch (${this.app.hotkeyManager.printHotkeyForCommand('catch:catch-command')})`, (evt: MouseEvent) => {
+			new CatchModal(this.app, (result) => this.addToInbox(result)).open();
 		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
-
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
+			id: 'catch-command',
+			name: 'Catch to Inbox',
 			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
+				new CatchModal(this.app, (result) => this.addToInbox(result)).open();
 			}
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.addSettingTab(new CatchSettingTab(this.app, this));
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
 
 	onunload() {
-
+		if (this.settings.webserver)
+			this.stopExpressServer();
 	}
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		if (this.settings.inboxFolder == '') {
+			new Notice('🚩 Configure to get started...');
+		}
+		if (this.settings.webserver) {
+			this.startExpressServer();
+		}
 	}
 
-	async saveSettings() {
+	async saveSettings(previous: any) {
+		if (this.settings.webserver && previous === 'webserver:false') {
+			this.startExpressServer();
+		} else if (!this.settings.webserver && previous === 'webserver:true') {
+			this.stopExpressServer();
+		}
 		await this.saveData(this.settings);
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
+class CatchModal extends Modal {
+	result: string;
+	onSubmit: (result: string) => void;
+
+	constructor(app: App, onSubmit: (result: string) => void) {
+		// constructor(app: App) {
 		super(app);
+		this.onSubmit = onSubmit;
 	}
 
 	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
+		const { contentEl } = this;
+		this.containerEl.addClass('catch__modal');
+		contentEl.createEl('input', { placeholder: 'Catch your idea for later...', cls: 'catch__input modal-input' })
+			.addEventListener('keypress', (e) => {
+				if (e.key === 'Enter') {
+					this.result = (e.target as HTMLInputElement).value;
+					this.close();
+					this.onSubmit(this.result);
+				}
+			});
 	}
 
 	onClose() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.empty();
 	}
 }
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+class CatchSettingTab extends PluginSettingTab {
+	plugin: CatchPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: CatchPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this;
 
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+			.setName('Inbox folder')
+			.setDesc('Which top-level folder should caught ideas be stored?')
+			.addDropdown(dropdown => dropdown
+				.addOptions(this.plugin.rootFolders)
+				.setValue(this.plugin.settings.inboxFolder)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
+					let prev = `inboxFolder:${this.plugin.settings.inboxFolder}`;
+					this.plugin.settings.inboxFolder = value;
+					await this.plugin.saveSettings(prev);
 				}));
+
+		new Setting(containerEl)
+			.setName('Web Server')
+			.setDesc('Do you want to use an ExpressJS web server to listen for a hotkey client?')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.webserver)
+				.onChange(async (value) => {
+					let prev = `webserver:${this.plugin.settings.webserver}`;
+					this.plugin.settings.webserver = value;
+					await this.plugin.saveSettings(prev);
+					portSetting.setDisabled(value);
+				}));
+
+		const portSetting: Setting = new Setting(containerEl)
+			.setName('Web Server Port')
+			.setDesc('What port should the web server listen on?')
+			.addText(text => text
+				.setValue(this.plugin.settings.port)
+				.onChange(async (value) => {
+					let prev = `port:${this.plugin.settings.port}`;
+					this.plugin.settings.port = value;
+					await this.plugin.saveSettings(prev);
+				}));
+
+		if (this.plugin.settings.webserver) {
+			portSetting.setDisabled(true);
+		}
+
+		new Setting(containerEl)
+			.setName('Template')
+			.setDesc('What should the default note contain?')
+			.addTextArea(textarea => textarea
+				.setPlaceholder('Put your quick capture markdown here...')
+				.setValue(this.plugin.settings.template)
+				.onChange(async (value: string) => {
+					let prev = `template:${this.plugin.settings.template}`;
+					this.plugin.settings.template = value;
+					await this.plugin.saveSettings(prev);
+				})
+				.inputEl.setAttrs({ rows: 6, cols: 60 }));
 	}
 }
